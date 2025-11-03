@@ -153,51 +153,39 @@ app.get('/api/projects', async (req, res) => {
     // Procesar proyectos para agregar información de jerarquía
     const projects = result.data.projects || [];
 
-    // Crear un mapa de proyectos por ID para fácil acceso
-    const projectMap = new Map();
-    projects.forEach(project => {
-      projectMap.set(project.id, {
-        ...project,
-        level: 0, // Se calculará después
-        children: []
-      });
-    });
+    // Separar proyectos principales (sin parent) de subproyectos
+    const mainProjects = [];
+    const subprojectsByParent = new Map();
 
-    // Establecer relaciones padre-hijo y calcular niveles
-    const rootProjects = [];
     projects.forEach(project => {
-      const projectNode = projectMap.get(project.id);
-
       if (project.parent) {
-        // Este es un subproyecto
-        const parent = projectMap.get(project.parent.id);
-        if (parent) {
-          parent.children.push(projectNode);
-          projectNode.level = parent.level + 1;
+        // Es un subproyecto
+        const parentId = project.parent.id;
+        if (!subprojectsByParent.has(parentId)) {
+          subprojectsByParent.set(parentId, []);
         }
+        subprojectsByParent.get(parentId).push({
+          ...project,
+          parent_id: parentId
+        });
       } else {
-        // Este es un proyecto raíz
-        rootProjects.push(projectNode);
+        // Es un proyecto principal
+        mainProjects.push({
+          ...project,
+          has_subprojects: false // Se actualizará después
+        });
       }
     });
 
-    // Función para aplanar la jerarquía manteniendo el orden y nivel
-    const flattenProjects = (projects, result = []) => {
-      projects.forEach(project => {
-        result.push(project);
-        if (project.children.length > 0) {
-          flattenProjects(project.children, result);
-        }
-      });
-      return result;
-    };
-
-    // Aplanar manteniendo la jerarquía visual
-    const flatProjects = flattenProjects(rootProjects);
+    // Marcar proyectos principales que tienen subproyectos
+    mainProjects.forEach(project => {
+      project.has_subprojects = subprojectsByParent.has(project.id);
+    });
 
     res.json({
-      projects: flatProjects,
-      total_count: flatProjects.length
+      main_projects: mainProjects,
+      subprojects: Object.fromEntries(subprojectsByParent),
+      total_count: projects.length
     });
   } else {
     res.status(result.status || 500).json({
