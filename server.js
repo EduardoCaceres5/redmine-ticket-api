@@ -46,9 +46,19 @@ const redmineConfig = {
   defaultProjectId: process.env.DEFAULT_PROJECT_ID
 };
 
+// Validar que las variables de entorno críticas estén configuradas
+if (!redmineConfig.url || !redmineConfig.apiKey) {
+  console.error('ADVERTENCIA: Variables de entorno REDMINE_URL y REDMINE_API_KEY no están configuradas');
+}
+
 // Función auxiliar para hacer llamadas a la API de Redmine
 const callRedmineAPI = async (endpoint, method = 'GET', data = null, headers = {}) => {
   try {
+    // Validar que las credenciales de Redmine estén configuradas
+    if (!redmineConfig.url || !redmineConfig.apiKey) {
+      throw new Error('Las credenciales de Redmine no están configuradas. Verifica las variables de entorno REDMINE_URL y REDMINE_API_KEY.');
+    }
+
     const config = {
       method,
       url: `${redmineConfig.url}${endpoint}`,
@@ -252,8 +262,14 @@ app.get('/api/tickets/:id', async (req, res) => {
   }
 });
 
-// Iniciar servidor
-app.listen(PORT, () => {
-  console.log(`Servidor backend ejecutándose en http://localhost:${PORT}`);
-  console.log(`Redmine URL configurado: ${redmineConfig.url}`);
-});
+// Iniciar servidor solo en desarrollo local
+// En Vercel, la app se exporta como función serverless
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`Servidor backend ejecutándose en http://localhost:${PORT}`);
+    console.log(`Redmine URL configurado: ${redmineConfig.url}`);
+  });
+}
+
+// Exportar la app para Vercel
+export default app;
