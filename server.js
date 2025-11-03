@@ -16,15 +16,8 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 10 * 1024 * 1024, // 10MB
-  },
-  fileFilter: (req, file, cb) => {
-    // Aceptar solo imágenes
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Solo se permiten archivos de imagen'));
-    }
   }
+  // Se permiten todos los tipos de archivos (PDF, imágenes, documentos, etc.)
 });
 
 // Middleware
