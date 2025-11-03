@@ -144,12 +144,61 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', message: 'Servidor funcionando correctamente' });
 });
 
-// Obtener lista de proyectos disponibles
+// Obtener lista de proyectos disponibles (incluyendo subproyectos)
 app.get('/api/projects', async (req, res) => {
-  const result = await callRedmineAPI('/projects.json');
+  // Incluir subproyectos en la respuesta usando el parámetro include
+  const result = await callRedmineAPI('/projects.json?include=descendants');
 
   if (result.success) {
-    res.json(result.data);
+    // Procesar proyectos para agregar información de jerarquía
+    const projects = result.data.projects || [];
+
+    // Crear un mapa de proyectos por ID para fácil acceso
+    const projectMap = new Map();
+    projects.forEach(project => {
+      projectMap.set(project.id, {
+        ...project,
+        level: 0, // Se calculará después
+        children: []
+      });
+    });
+
+    // Establecer relaciones padre-hijo y calcular niveles
+    const rootProjects = [];
+    projects.forEach(project => {
+      const projectNode = projectMap.get(project.id);
+
+      if (project.parent) {
+        // Este es un subproyecto
+        const parent = projectMap.get(project.parent.id);
+        if (parent) {
+          parent.children.push(projectNode);
+          projectNode.level = parent.level + 1;
+        }
+      } else {
+        // Este es un proyecto raíz
+        rootProjects.push(projectNode);
+      }
+    });
+
+    // Función para aplanar la jerarquía manteniendo el orden y nivel
+    const flattenProjects = (projects, result = []) => {
+      projects.forEach(project => {
+        result.push(project);
+        if (project.children.length > 0) {
+          flattenProjects(project.children, result);
+        }
+      });
+      return result;
+    };
+
+    // Aplanar manteniendo la jerarquía visual
+    const flatProjects = flattenProjects(rootProjects);
+
+    res.json({
+      projects: flatProjects,
+      total_count: flatProjects.length
+    });
   } else {
     res.status(result.status || 500).json({
       error: 'Error al obtener proyectos',
