@@ -196,7 +196,8 @@ app.post('/api/tickets', upload.array('attachments', 5), async (req, res) => {
     priority_id,
     modulo,
     numero_tramite,
-    identificador_operacion
+    identificador_operacion,
+    user_info
   } = req.body;
 
   // Validaciones básicas
@@ -207,10 +208,29 @@ app.post('/api/tickets', upload.array('attachments', 5), async (req, res) => {
     });
   }
 
+  // Extraer información del usuario de Keycloak
+  let userInfo = null;
+  try {
+    userInfo = user_info ? JSON.parse(user_info) : null;
+  } catch (error) {
+    console.warn('Error al parsear user_info:', error);
+  }
+
+  // Validar que se haya proporcionado información del usuario
+  if (!userInfo || !userInfo.email) {
+    return res.status(400).json({
+      error: 'Información de usuario no disponible',
+      details: 'Se requiere información del usuario autenticado para crear el ticket'
+    });
+  }
+
+  console.log(`📝 Creando ticket para usuario: ${userInfo.name} (${userInfo.email})`);
+
   try {
     // Subir archivos a Redmine primero
     const uploads = [];
     if (req.files && req.files.length > 0) {
+      console.log(`📎 Subiendo ${req.files.length} archivo(s)...`);
       for (const file of req.files) {
         const uploadResult = await uploadFileToRedmine(file);
         if (uploadResult.success) {
@@ -221,14 +241,21 @@ app.post('/api/tickets', upload.array('attachments', 5), async (req, res) => {
       }
     }
 
-    // Construir descripción completa con campos personalizados
+    // Construir descripción completa con información del usuario y campos personalizados
     let fullDescription = description;
 
+    // Agregar información del solicitante
+    fullDescription += '\n\n---\n**Información del Solicitante:**\n';
+    fullDescription += `- **Nombre:** ${userInfo.name}\n`;
+    fullDescription += `- **Email:** ${userInfo.email}\n`;
+    if (userInfo.username) fullDescription += `- **Usuario Keycloak:** ${userInfo.username}\n`;
+
+    // Agregar información adicional si existe
     if (modulo || numero_tramite || identificador_operacion) {
-      fullDescription += '\n\n--- Información adicional ---\n';
-      if (modulo) fullDescription += `Módulo: ${modulo}\n`;
-      if (numero_tramite) fullDescription += `Número de trámite: ${numero_tramite}\n`;
-      if (identificador_operacion) fullDescription += `Identificador de operación: ${identificador_operacion}\n`;
+      fullDescription += '\n**Información Adicional:**\n';
+      if (modulo) fullDescription += `- **Módulo:** ${modulo}\n`;
+      if (numero_tramite) fullDescription += `- **Número de trámite:** ${numero_tramite}\n`;
+      if (identificador_operacion) fullDescription += `- **Identificador de operación:** ${identificador_operacion}\n`;
     }
 
     // Estructura del issue para Redmine
@@ -239,6 +266,7 @@ app.post('/api/tickets', upload.array('attachments', 5), async (req, res) => {
         description: fullDescription,
         tracker_id: tracker_id || 1, // Por defecto tipo "Bug" o "Soporte"
         priority_id: priority_id || 2, // Por defecto prioridad "Normal"
+        // No se especifica author_id, Redmine usará el usuario de la API Key
       }
     };
 
@@ -250,19 +278,60 @@ app.post('/api/tickets', upload.array('attachments', 5), async (req, res) => {
     const result = await callRedmineAPI('/issues.json', 'POST', issueData);
 
     if (result.success) {
+      const ticketId = result.data.issue.id;
+
+      // Log de auditoría
+      const auditLog = {
+        timestamp: new Date().toISOString(),
+        action: 'CREATE_TICKET',
+        user: {
+          keycloak_id: userInfo.sub,
+          email: userInfo.email,
+          username: userInfo.username,
+          name: userInfo.name
+        },
+        ticket: {
+          redmine_id: ticketId,
+          project_id: project_id,
+          subject: subject,
+          tracker_id: tracker_id,
+          priority_id: priority_id
+        },
+        attachments: uploads.length
+      };
+
+      console.log('✅ AUDIT:', JSON.stringify(auditLog));
+      console.log(`✅ Ticket #${ticketId} creado exitosamente por ${userInfo.name} (${userInfo.email})`);
+
       res.status(201).json({
         message: 'Ticket creado exitosamente',
         ticket: result.data.issue,
         attachmentsUploaded: uploads.length
       });
     } else {
+      console.error('❌ Error al crear ticket en Redmine:', result.error);
       res.status(result.status || 500).json({
         error: 'Error al crear ticket',
         details: result.error
       });
     }
   } catch (error) {
-    console.error('Error en el proceso de creación de ticket:', error);
+    console.error('❌ Error en el proceso de creación de ticket:', error);
+
+    // Log de error para auditoría
+    if (userInfo) {
+      console.error('ERROR AUDIT:', JSON.stringify({
+        timestamp: new Date().toISOString(),
+        action: 'CREATE_TICKET_FAILED',
+        user: {
+          email: userInfo.email,
+          username: userInfo.username,
+          name: userInfo.name
+        },
+        error: error.message
+      }));
+    }
+
     res.status(500).json({
       error: 'Error interno del servidor',
       details: error.message
