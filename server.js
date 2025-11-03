@@ -3,6 +3,8 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import axios from 'axios';
 import multer from 'multer';
+import https from 'https';
+import http from 'http';
 
 dotenv.config();
 
@@ -51,6 +53,15 @@ if (!redmineConfig.url || !redmineConfig.apiKey) {
   console.error('ADVERTENCIA: Variables de entorno REDMINE_URL y REDMINE_API_KEY no están configuradas');
 }
 
+// Agentes HTTP/HTTPS para manejar conexiones
+const httpsAgent = new https.Agent({
+  rejectUnauthorized: false
+});
+
+const httpAgent = new http.Agent({
+  keepAlive: true
+});
+
 // Función auxiliar para hacer llamadas a la API de Redmine
 const callRedmineAPI = async (endpoint, method = 'GET', data = null, headers = {}) => {
   try {
@@ -59,6 +70,9 @@ const callRedmineAPI = async (endpoint, method = 'GET', data = null, headers = {
       throw new Error('Las credenciales de Redmine no están configuradas. Verifica las variables de entorno REDMINE_URL y REDMINE_API_KEY.');
     }
 
+    // Determinar si la URL es HTTP o HTTPS
+    const isHttps = redmineConfig.url.startsWith('https://');
+
     const config = {
       method,
       url: `${redmineConfig.url}${endpoint}`,
@@ -66,7 +80,10 @@ const callRedmineAPI = async (endpoint, method = 'GET', data = null, headers = {
         'X-Redmine-API-Key': redmineConfig.apiKey,
         'Content-Type': 'application/json',
         ...headers
-      }
+      },
+      // Usar el agente apropiado según el protocolo
+      httpAgent: !isHttps ? httpAgent : undefined,
+      httpsAgent: isHttps ? httpsAgent : undefined
     };
 
     if (data) {
@@ -76,11 +93,19 @@ const callRedmineAPI = async (endpoint, method = 'GET', data = null, headers = {
     const response = await axios(config);
     return { success: true, data: response.data };
   } catch (error) {
-    console.error('Error en Redmine API:', error.response?.data || error.message);
+    console.error('Error en Redmine API:', {
+      endpoint,
+      url: redmineConfig.url,
+      error: error.message,
+      code: error.code,
+      response: error.response?.data
+    });
+
     return {
       success: false,
       error: error.response?.data || error.message,
-      status: error.response?.status
+      status: error.response?.status,
+      code: error.code
     };
   }
 };
@@ -88,6 +113,9 @@ const callRedmineAPI = async (endpoint, method = 'GET', data = null, headers = {
 // Función para subir archivos a Redmine
 const uploadFileToRedmine = async (file) => {
   try {
+    // Determinar si la URL es HTTP o HTTPS
+    const isHttps = redmineConfig.url.startsWith('https://');
+
     const response = await axios.post(
       `${redmineConfig.url}/uploads.json`,
       file.buffer,
@@ -96,6 +124,8 @@ const uploadFileToRedmine = async (file) => {
           'X-Redmine-API-Key': redmineConfig.apiKey,
           'Content-Type': 'application/octet-stream',
         },
+        httpAgent: !isHttps ? httpAgent : undefined,
+        httpsAgent: isHttps ? httpsAgent : undefined
       }
     );
 

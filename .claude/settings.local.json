@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(echo:*)",
-      "Bash(.env.example)"
+      "Bash(.env.example)",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []
