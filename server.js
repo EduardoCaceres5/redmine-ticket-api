@@ -38,7 +38,8 @@ app.use(express.json());
 const redmineConfig = {
   url: process.env.REDMINE_URL,
   apiKey: process.env.REDMINE_API_KEY,
-  defaultProjectId: process.env.DEFAULT_PROJECT_ID
+  defaultProjectId: process.env.DEFAULT_PROJECT_ID,
+  keycloakCustomFieldId: process.env.REDMINE_KEYCLOAK_CUSTOM_FIELD_ID || null
 };
 
 // Validar que las variables de entorno críticas estén configuradas
@@ -223,6 +224,20 @@ app.get('/api/priorities', async (req, res) => {
   }
 });
 
+// Obtener custom fields (temporal - para averiguar el ID del campo keycloak-user-id)
+app.get('/api/custom-fields', async (req, res) => {
+  const result = await callRedmineAPI('/custom_fields.json');
+
+  if (result.success) {
+    res.json(result.data);
+  } else {
+    res.status(result.status || 500).json({
+      error: 'Error al obtener custom fields',
+      details: result.error
+    });
+  }
+});
+
 // Crear un nuevo ticket en Redmine
 app.post('/api/tickets', upload.array('attachments', 5), async (req, res) => {
   const {
@@ -307,6 +322,17 @@ app.post('/api/tickets', upload.array('attachments', 5), async (req, res) => {
       }
     };
 
+    // Agregar custom field de Keycloak User ID si está configurado
+    if (redmineConfig.keycloakCustomFieldId && userInfo.sub) {
+      issueData.issue.custom_fields = [
+        {
+          id: parseInt(redmineConfig.keycloakCustomFieldId),
+          value: userInfo.sub
+        }
+      ];
+      console.log(`📋 Agregando custom field Keycloak User ID (${redmineConfig.keycloakCustomFieldId}): ${userInfo.sub}`);
+    }
+
     // Agregar uploads si hay archivos
     if (uploads.length > 0) {
       issueData.issue.uploads = uploads;
@@ -376,10 +402,68 @@ app.post('/api/tickets', upload.array('attachments', 5), async (req, res) => {
   }
 });
 
+// Obtener tickets del usuario autenticado (por Keycloak sub)
+app.get('/api/tickets/my-tickets', async (req, res) => {
+  const { keycloak_sub } = req.query;
+
+  // Validar que se proporcione el keycloak_sub
+  if (!keycloak_sub) {
+    return res.status(400).json({
+      error: 'Parámetro requerido faltante',
+      details: 'Se requiere el parámetro keycloak_sub'
+    });
+  }
+
+  console.log(`🔍 Buscando tickets para usuario: ${keycloak_sub}`);
+
+  try {
+    let result;
+
+    // Si está configurado el custom field, buscar por custom field (más eficiente)
+    if (redmineConfig.keycloakCustomFieldId) {
+      console.log(`📋 Buscando por custom field ID: ${redmineConfig.keycloakCustomFieldId}`);
+      const searchQuery = encodeURIComponent(keycloak_sub);
+      result = await callRedmineAPI(
+        `/issues.json?cf_${redmineConfig.keycloakCustomFieldId}=${searchQuery}&status_id=*&limit=100&sort=updated_on:desc`
+      );
+    } else {
+      // Fallback: Buscar por descripción (menos eficiente pero funciona sin custom field)
+      console.log(`⚠️ Custom field no configurado, usando búsqueda por descripción`);
+      const searchQuery = encodeURIComponent(keycloak_sub);
+      result = await callRedmineAPI(
+        `/issues.json?description~=${searchQuery}&status_id=*&limit=100&sort=updated_on:desc`
+      );
+    }
+
+    if (result.success) {
+      const issues = result.data.issues || [];
+
+      console.log(`✅ Encontrados ${issues.length} ticket(s) para el usuario`);
+
+      res.json({
+        issues: issues,
+        total_count: result.data.total_count || issues.length
+      });
+    } else {
+      console.error('❌ Error al buscar tickets:', result.error);
+      res.status(result.status || 500).json({
+        error: 'Error al buscar tickets',
+        details: result.error
+      });
+    }
+  } catch (error) {
+    console.error('❌ Error en el proceso de búsqueda de tickets:', error);
+    res.status(500).json({
+      error: 'Error interno del servidor',
+      details: error.message
+    });
+  }
+});
+
 // Obtener un ticket específico
 app.get('/api/tickets/:id', async (req, res) => {
   const { id } = req.params;
-  const result = await callRedmineAPI(`/issues/${id}.json`);
+  const result = await callRedmineAPI(`/issues/${id}.json?include=journals,attachments`);
 
   if (result.success) {
     res.json(result.data);
